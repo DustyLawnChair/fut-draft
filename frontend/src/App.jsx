@@ -1,5 +1,6 @@
 
 import { useState } from 'react'
+import { calculateChemistry } from './chemistry'
 import './App.css'
 
 function shufflePlayers(players) {
@@ -69,18 +70,42 @@ function App() {
   const [squad, setSquad] = useState({})
   const [selectedSlot, setSelectedSlot] = useState(null)
   const [players, setPlayers] = useState([])
+  const [choicesBySlot, setChoicesBySlot] = useState({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+const chemistryByPlayer = calculateChemistry(squad)
+
+const squadChemistry = Object.values(chemistryByPlayer).reduce(
+  (total, chemistry) => total + chemistry,
+  0,
+)
+
+
 
 async function openPosition(slot) {
+  // Filled positions cannot be reopened.
+  if (squad[slot]) return
+
   setSelectedSlot(slot)
   setPlayers([])
   setError('')
   setLoading(true)
 
+  // Reuse the original choices when reopening a position.
+  if (choicesBySlot[slot]) {
+    const pickedIds = Object.values(squad).map((player) => player.id)
+
+    const remainingChoices = choicesBySlot[slot].filter(
+      (player) => !pickedIds.includes(player.id),
+    )
+
+    setPlayers(remainingChoices)
+    setLoading(false)
+    return
+  }
+
   try {
-    // Fetch every available card variant.
     const response = await fetch(`${API_BASE_URL}/player-cards`)
 
     if (!response.ok) {
@@ -89,31 +114,29 @@ async function openPosition(slot) {
 
     const data = await response.json()
 
-    // Exclude players assigned to other slots.
-    // Different cards belonging to the same player share one player ID.
-    const pickedIds = Object.entries(squad)
-      .filter(([slotId]) => slotId !== slot)
-      .map(([, player]) => player.id)
-
+    // Exclude players already selected in other positions.
+    const pickedIds = Object.values(squad).map((player) => player.id)
     const eligiblePositions = positionGroups[slot] || []
 
-    // Filter by the card's position, then prevent duplicate player identities.
     const eligibleCards = data.filter((card) => {
       if (!card.player) return false
 
       const position = card.position?.toUpperCase()
-
       const isEligible = eligiblePositions.includes(position)
       const isAlreadyPicked = pickedIds.includes(card.player.id)
 
       return isEligible && !isAlreadyPicked
     })
 
-    // Convert the database card format into the format used by the UI.
     const availablePlayers = eligibleCards.map(normalizeCard)
+    const choices = shufflePlayers(availablePlayers).slice(0, 5)
 
-    // Randomize the eligible choices and display at most five.
-    setPlayers(shufflePlayers(availablePlayers).slice(0, 5))
+    setChoicesBySlot((current) => ({
+      ...current,
+      [slot]: choices,
+    }))
+
+    setPlayers(choices)
   } catch (err) {
     setError(err.message || 'Could not load players.')
   } finally {
@@ -123,6 +146,7 @@ async function openPosition(slot) {
 
   function selectPlayer(player) {
     if (!selectedSlot) return
+    if(squad[selectedSlot]) return
 
     setSquad((current) => ({
       ...current,
@@ -190,7 +214,9 @@ async function openPosition(slot) {
                     left: `${slot.x}%`,
                     top: `${slot.y}%`,
                   }}
-                  onClick={() => openPosition(slot.id)}
+                  onClick={() => {
+                    if (!player) openPosition(slot.id)
+                    }}
                   aria-label={`${
                     player?.name || 'Choose player for'
                   } ${slot.label}`}
@@ -205,6 +231,12 @@ async function openPosition(slot) {
                   <span className="slot-position">
                     {player ? player.name : slot.label}
                   </span>
+
+                  {player && (
+                    <span className="slot-chemistry">
+                      CHEM {chemistryByPlayer[player.cardId ?? player.id] ?? 0}/3
+                    </span>
+                  )}
                 </button>
               )
             })}
@@ -229,6 +261,11 @@ async function openPosition(slot) {
           <div className="progress-label">
             <span>Players selected</span>
             <strong>{selectedCount} / 11</strong>
+          </div>
+
+          <div className="chemistry-summary">
+            <span>Squad chemistry</span>
+            <strong>{squadChemistry} / 33</strong>
           </div>
 
           <div className="selection-panel">
