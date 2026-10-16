@@ -2,6 +2,19 @@
 import { useState } from 'react'
 import './App.css'
 
+function shufflePlayers(players) {
+  const shuffled = [...players];
+
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+
+  return shuffled;
+}
+
+const API_BASE_URL = 'http://localhost:8080/api'
+
 const formation = [
   { id: 'ST', label: 'ST', x: 50, y: 12 },
   { id: 'LW', label: 'LW', x: 20, y: 25 },
@@ -15,34 +28,6 @@ const formation = [
   { id: 'RB', label: 'RB', x: 88, y: 68 },
   { id: 'GK', label: 'GK', x: 50, y: 89 },
 ]
-
-function App() {
-  const [squad, setSquad] = useState({})
-  const [selectedSlot, setSelectedSlot] = useState(null)
-  const [players, setPlayers] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  async function openPosition(slot) {
-    setSelectedSlot(slot)
-    setPlayers([])
-    setError('')
-    setLoading(true)
-
-    try {
-      const isCam = slot === 'CAM'
-
-    const response = await fetch(
-      isCam
-        ? 'http://localhost:8080/api/player-cards?position=CAM'
-        : 'http://localhost:8080/api/players'
-    )
-
-
-
-const data = await response.json()
-
-const pickedIds = Object.values(squad).map((player) => player.id)
 
 const positionGroups = {
   ST: ['ST', 'CF'],
@@ -58,47 +43,83 @@ const positionGroups = {
   GK: ['GK'],
 }
 
-const eligiblePositions = positionGroups[slot] || []
-
-const availablePlayers = isCam
-  ? data
-      .filter((card) =>
-        !pickedIds.includes(card.player.id) ||
-        card.player.id === squad[slot]?.id
-      )
-      .map((card) => ({
-        id: card.player.id,
-        cardId: card.id,
-        name: card.player.name,
-        nation: card.player.nation,
-        club: card.player.club,
-        league: card.player.league,
-        position: card.position,
-        overall: card.overall,
-        pace: card.pace,
-        shooting: card.shooting,
-        passing: card.passing,
-        dribbling: card.dribbling,
-        defending: card.defending,
-        physical: card.physical,
-        gameEdition: card.gameEdition,
-        cardVersion: card.cardVersion,
-        cardImageUrl: card.cardImageUrl,
-      }))
-  : data.filter(
-      (player) =>
-        eligiblePositions.includes(player.position.toUpperCase()) &&
-        (!pickedIds.includes(player.id) ||
-          player.id === squad[slot]?.id)
-    )
-
-  setPlayers(availablePlayers)
-    } catch (err) {
-      setError(err.message || 'Could not load players.')
-    } finally {
-      setLoading(false)
-    }
+function normalizeCard(card) {
+  return {
+    id: card.player.id,
+    cardId: card.id,
+    name: card.player.name,
+    nation: card.player.nation,
+    club: card.player.club,
+    league: card.player.league,
+    position: card.position,
+    overall: card.overall,
+    pace: card.pace,
+    shooting: card.shooting,
+    passing: card.passing,
+    dribbling: card.dribbling,
+    defending: card.defending,
+    physical: card.physical,
+    gameEdition: card.gameEdition,
+    cardVersion: card.cardVersion,
+    cardImageUrl: card.cardImageUrl,
   }
+}
+
+function App() {
+  const [squad, setSquad] = useState({})
+  const [selectedSlot, setSelectedSlot] = useState(null)
+  const [players, setPlayers] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+
+async function openPosition(slot) {
+  setSelectedSlot(slot)
+  setPlayers([])
+  setError('')
+  setLoading(true)
+
+  try {
+    // Fetch every available card variant.
+    const response = await fetch(`${API_BASE_URL}/player-cards`)
+
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status}`)
+    }
+
+    const data = await response.json()
+
+    // Exclude players assigned to other slots.
+    // Different cards belonging to the same player share one player ID.
+    const pickedIds = Object.entries(squad)
+      .filter(([slotId]) => slotId !== slot)
+      .map(([, player]) => player.id)
+
+    const eligiblePositions = positionGroups[slot] || []
+
+    // Filter by the card's position, then prevent duplicate player identities.
+    const eligibleCards = data.filter((card) => {
+      if (!card.player) return false
+
+      const position = card.position?.toUpperCase()
+
+      const isEligible = eligiblePositions.includes(position)
+      const isAlreadyPicked = pickedIds.includes(card.player.id)
+
+      return isEligible && !isAlreadyPicked
+    })
+
+    // Convert the database card format into the format used by the UI.
+    const availablePlayers = eligibleCards.map(normalizeCard)
+
+    // Randomize the eligible choices and display at most five.
+    setPlayers(shufflePlayers(availablePlayers).slice(0, 5))
+  } catch (err) {
+    setError(err.message || 'Could not load players.')
+  } finally {
+    setLoading(false)
+  }
+}
 
   function selectPlayer(player) {
     if (!selectedSlot) return
@@ -113,14 +134,27 @@ const availablePlayers = isCam
     setError('')
   }
 
+  function cancelSelection() {
+    setSelectedSlot(null)
+    setPlayers([])
+    setError('')
+  }
+
   const selectedCount = Object.keys(squad).length
+  const selectedPosition = formation.find(
+    (slot) => slot.id === selectedSlot
+  )
 
   return (
     <main className="app">
       <header className="app-header">
         <p className="eyebrow">ULTIMATE TEAM • DRAFT MODE</p>
-        <h1>FUT <span>Draft</span></h1>
-        <p className="subtitle">Build your squad. Pick your starting eleven.</p>
+        <h1>
+          FUT <span>Draft</span>
+        </h1>
+        <p className="subtitle">
+          Build your squad. Pick your starting eleven.
+        </p>
       </header>
 
       <section className="draft-layout">
@@ -149,13 +183,24 @@ const availablePlayers = isCam
               return (
                 <button
                   key={slot.id}
-                  className={`position-slot ${selectedSlot === slot.id ? 'selected' : ''} ${player ? 'filled' : ''}`}
-                  style={{ left: `${slot.x}%`, top: `${slot.y}%` }}
+                  className={`position-slot ${
+                    selectedSlot === slot.id ? 'selected' : ''
+                  } ${player ? 'filled' : ''}`}
+                  style={{
+                    left: `${slot.x}%`,
+                    top: `${slot.y}%`,
+                  }}
                   onClick={() => openPosition(slot.id)}
-                  aria-label={`${player?.name || 'Choose player for'} ${slot.label}`}
+                  aria-label={`${
+                    player?.name || 'Choose player for'
+                  } ${slot.label}`}
                 >
                   <span className="slot-plus">
-                    {player ? player.overall : selectedSlot === slot.id ? '✓' : '+'}
+                    {player
+                      ? player.overall
+                      : selectedSlot === slot.id
+                        ? '✓'
+                        : '+'}
                   </span>
                   <span className="slot-position">
                     {player ? player.name : slot.label}
@@ -170,7 +215,8 @@ const availablePlayers = isCam
           <p className="eyebrow">DRAFT PROGRESS</p>
           <h2>Build your XI</h2>
           <p className="sidebar-description">
-            Select a position on the pitch, then choose a player for your squad.
+            Select a position on the pitch, then choose a player for your
+            squad.
           </p>
 
           <div className="progress-track">
@@ -179,6 +225,7 @@ const availablePlayers = isCam
               style={{ width: `${(selectedCount / 11) * 100}%` }}
             />
           </div>
+
           <div className="progress-label">
             <span>Players selected</span>
             <strong>{selectedCount} / 11</strong>
@@ -189,48 +236,78 @@ const availablePlayers = isCam
               <>
                 <span className="selection-label">READY WHEN YOU ARE</span>
                 <h3>Choose a position</h3>
-                <p>Click any slot on the pitch to see available players.</p>
+                <p>
+                  Click any slot on the pitch to see available players.
+                </p>
               </>
             ) : (
               <>
                 <span className="selection-label">PLAYER SELECTION</span>
-                <h3>Choose your {formation.find((slot) => slot.id === selectedSlot)?.label}</h3>
+                <h3>Choose your {selectedPosition?.label}</h3>
 
                 {loading && <p>Loading available players...</p>}
 
-                {error && <p className="selection-error">{error}</p>}
+                {error && (
+                  <p className="selection-error">{error}</p>
+                )}
 
                 {!loading && !error && players.length === 0 && (
-                  <p>No available players. Add more players to your database to continue.</p>
+                  <p>
+                    No available players. Add more players to your database
+                    to continue.
+                  </p>
                 )}
 
                 <div className="choice-list">
                   {players.map((player) => (
                     <button
-                      className="player-choice"
-                      key={player.id}
+                      className={`player-choice ${
+                        player.cardVersion ? 'fut-card special-card' : ''
+                      }`}
+                      key={player.cardId || player.id}
                       onClick={() => selectPlayer(player)}
                     >
-                      <span className="choice-rating">{player.overall}</span>
-                      <span className="choice-info">
-                        <strong>{player.name}</strong>
-                          <small>
-                            {player.position} · {player.club}
-                            {player.gameEdition && ` · ${player.gameEdition}`}
-                          </small>
+                      <div className="fut-card-top">
+                        <div className="fut-card-rating">
+                          <strong>{player.overall}</strong>
+                          <span>{player.position}</span>
+                        </div>
 
-                          {player.cardVersion && (
-                            <small className="card-version">{player.cardVersion}</small>
-                          )}                      
-                        </span>
-                      <span className="choice-arrow">+</span>
+                        <div className="fut-card-identity">
+                          <strong>{player.name}</strong>
+                          <span>
+                            {player.gameEdition || player.club}
+                          </span>
+                          <span className="fut-card-version">
+                            {player.cardVersion || player.club}
+                          </span>
+                        </div>
+
+                        <span className="choice-arrow">+</span>
+                      </div>
+
+                      <div className="fut-card-stats">
+                        {[
+                          ['PAC', player.pace],
+                          ['SHO', player.shooting],
+                          ['PAS', player.passing],
+                          ['DRI', player.dribbling],
+                          ['DEF', player.defending],
+                          ['PHY', player.physical],
+                        ].map(([label, value]) => (
+                          <div className="fut-stat" key={label}>
+                            <strong>{value ?? '-'}</strong>
+                            <span>{label}</span>
+                          </div>
+                        ))}
+                      </div>
                     </button>
                   ))}
                 </div>
 
                 <button
                   className="secondary-button"
-                  onClick={() => setSelectedSlot(null)}
+                  onClick={cancelSelection}
                 >
                   Cancel
                 </button>
